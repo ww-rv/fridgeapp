@@ -84,6 +84,10 @@ function sw(tab) {
   );
   updateIndicator(tab);
 
+  // FAB only on Продукти tab
+  document.getElementById('fab-wrap').style.display = tab === 'fridge' ? '' : 'none';
+  closeFab();
+
   if (tab === 'fridge')  renderFridge();
   if (tab === 'alerts')  renderAlerts();
   if (tab === 'recipes') renderRecipes();
@@ -115,6 +119,21 @@ function closeFab() {
   fabOpen = false;
   document.getElementById('fab-wrap').classList.remove('open');
   document.getElementById('fab-backdrop').style.display = 'none';
+}
+
+// ===== TODAY RAIL DISMISS =====
+// Після дії на картці в today rail — ховаємо її до наступного оновлення
+const dismissedFromRail = new Set();
+
+function consumeFromRail(id) {
+  dismissedFromRail.add(id);
+  consumeCard(id);
+}
+
+function shopFromRail(id) {
+  dismissedFromRail.add(id);
+  shopCard(id);
+  renderFridge();
 }
 
 // ===== QUICK ACTIONS (long press) =====
@@ -185,6 +204,7 @@ function consumeCard(id) {
   if (p.qty <= 0) {
     const nm = p.name;
     prods = prods.filter(x => x.id !== id);
+    dismissedFromRail.delete(id); // продукт видалено — прибрати з dismissed
     if (!shop.find(s => s.name.toLowerCase() === nm.toLowerCase()))
       shop.push({ id: nshop++, name: nm, note: 'закінчився', done: false });
     toast(`"${nm}" → список покупок`);
@@ -289,7 +309,7 @@ function renderFridge() {
   const expired = sorted.filter(p => days(p.exp) < 0);
   const soon    = sorted.filter(p => { const d = days(p.exp); return d >= 0 && d <= 2; });
   const ok      = sorted.filter(p => days(p.exp) > 2);
-  const atRisk  = [...expired, ...soon].slice(0, 5);
+  const atRisk  = [...expired, ...soon].filter(p => !dismissedFromRail.has(p.id)).slice(0, 5);
 
   const freshPct = prods.length
     ? Math.round(prods.filter(p => days(p.exp) > 0).length / prods.length * 100)
@@ -322,8 +342,8 @@ function renderFridge() {
         </div>
         <div class="tc-big">${isDanger ? `−${Math.abs(dd)}` : dd}<span style="font-size:13px;opacity:.6;margin-left:3px">дн.</span></div>
         <div class="tc-actions">
-          <button class="ghost-btn" onclick="shopCard(${p.id})">В список</button>
-          <button class="solid-btn" onclick="consumeCard(${p.id})">Спожив</button>
+          <button class="ghost-btn" onclick="shopFromRail(${p.id})">В список</button>
+          <button class="solid-btn" onclick="consumeFromRail(${p.id})">Спожив</button>
         </div>
       </div>`;
     }).join('')}</div>`;
