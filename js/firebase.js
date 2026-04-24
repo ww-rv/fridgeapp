@@ -228,6 +228,27 @@ function openFirebaseConsole() {
   if (tg) tg.openLink(url); else window.open(url, '_blank');
 }
 
+// ─── Спільна база штрихкодів ──────────────────────────────────────────────
+// Зберігає назви продуктів що були введені вручну — доступно всім користувачам
+
+async function lookupCommunityBarcode(code) {
+  if (!fbDb) return null;
+  try {
+    const snap = await fbDb.ref(`barcodes/${code}`).once('value');
+    return snap.val(); // { name, brand, cat } або null
+  } catch(e) {
+    return null;
+  }
+}
+
+function saveCommunityBarcode(code, data) {
+  if (!fbDb || !code || !data.name) return;
+  fbDb.ref(`barcodes/${code}`).set({
+    name: data.name, brand: data.brand || '', cat: data.cat || 'other',
+    ts: Date.now(),
+  }).catch(() => {});
+}
+
 // Ініціалізуємо одразу коли DOM готовий
 document.addEventListener('DOMContentLoaded', initFirebase);
 // Якщо DOMContentLoaded вже спрацював
