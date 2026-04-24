@@ -106,70 +106,83 @@ async function _fetchJSON(url, timeout = 6000) {
   }
 }
 
-// ─── Каскад баз даних ─────────────────────────────────────────────────────
+// ─── Витягнути назву з продукту OFF (будь-яка мова) ──────────────────────
+function _extractName(p) {
+  // Пріоритет: укр → загальне → рос → англ → інші мови → generic_name
+  if (p.product_name_uk) return p.product_name_uk;
+  if (p.product_name)    return p.product_name;
+  if (p.product_name_ru) return p.product_name_ru;
+  if (p.product_name_en) return p.product_name_en;
+  // Шукаємо будь-яке непусте поле product_name_XX
+  for (const [k, v] of Object.entries(p)) {
+    if (k.startsWith('product_name_') && typeof v === 'string' && v.trim()) return v.trim();
+  }
+  if (p.generic_name_uk) return p.generic_name_uk;
+  if (p.generic_name)    return p.generic_name;
+  return '';
+}
+
+// ─── Пошук у базах даних ─────────────────────────────────────────────────
 async function lookupBarcode(code) {
   const statusEl = document.getElementById('scan-status');
   stopCamera();
+  statusEl.textContent = '🔍 Шукаємо...';
 
-  // ── 1. Open Food Facts: world ─────────────────────────────────────────
+  // ── 1. Спільна Firebase-база (миттєво) ────────────────────────────────
+  if (typeof lookupCommunityBarcode === 'function') {
+    try {
+      const community = await lookupCommunityBarcode(code);
+      if (community && community.name) {
+        _setFound({ code, name: community.name, brand: community.brand || '',
+          image: '', nutri: '', cat: community.cat || 'other' });
+        document.getElementById('scan-status').textContent =
+          `✅ Знайдено: ${community.name}`;
+        return;
+      }
+    } catch(e) {}
+  }
+
+  // ── 2. Open Food Facts (повна відповідь без фільтра fields) ───────────
+  // Без fields= повертаються ВСІ мовні поля — тому знайдемо назву
+  // навіть якщо вона лише польською, французькою тощо
   statusEl.textContent = '🔍 Open Food Facts...';
   try {
-    const fields = 'product_name,product_name_uk,product_name_ru,brands,categories_tags,image_front_small_url,nutriscore_grade';
     const d = await _fetchJSON(
-      `https://world.openfoodfacts.org/api/v2/product/${code}.json?fields=${fields}`
+      `https://world.openfoodfacts.org/api/v0/product/${code}.json`, 8000
     );
     if (d.status === 1 && d.product) {
       const p    = d.product;
-      const name = p.product_name_uk || p.product_name || p.product_name_ru || '';
+      const name = _extractName(p);
       if (name) {
         _setFound({ code, name, brand: p.brands || '',
-          image: p.image_front_small_url || '',
+          image: p.image_front_small_url || p.image_url || '',
           nutri: p.nutriscore_grade || '',
           cat:   _guessCategory(p.categories_tags || []) });
         return;
       }
+      // Продукт є, але назва відсутня в базі — даємо ввести вручну,
+      // і зберігаємо бренд щоб юзер мав підказку
+      showManualEntry(code, p.brands || '');
+      return;
     }
-  } catch(e) { /* next */ }
+  } catch(e) {}
 
-  // ── 2. Open Food Facts: ua (українська база) ──────────────────────────
-  statusEl.textContent = '🔍 Open Food Facts UA...';
-  try {
-    const fields = 'product_name,product_name_uk,product_name_ru,brands,categories_tags,image_front_small_url,nutriscore_grade';
-    const d = await _fetchJSON(
-      `https://ua.openfoodfacts.org/api/v2/product/${code}.json?fields=${fields}`, 5000
-    );
-    if (d.status === 1 && d.product) {
-      const p    = d.product;
-      const name = p.product_name_uk || p.product_name || p.product_name_ru || '';
-      if (name) {
-        _setFound({ code, name, brand: p.brands || '',
-          image: p.image_front_small_url || '',
-          nutri: p.nutriscore_grade || '',
-          cat:   _guessCategory(p.categories_tags || []) });
-        return;
-      }
-    }
-  } catch(e) { /* next */ }
-
-  // ── 3. UPC ItemDB (100 безкоштовних запитів/день, без реєстрації) ─────
+  // ── 3. UPC ItemDB ─────────────────────────────────────────────────────
   statusEl.textContent = '🔍 UPC Item DB...';
   try {
     const d = await _fetchJSON(
       `https://api.upcitemdb.com/prod/trial/lookup?upc=${code}`, 5000
     );
-    if (d.code === 'OK' && d.items && d.items.length > 0) {
+    if (d.code === 'OK' && d.items && d.items.length > 0 && d.items[0].title) {
       const item = d.items[0];
-      if (item.title) {
-        _setFound({ code, name: item.title, brand: item.brand || '',
-          image: (item.images && item.images[0]) || '',
-          nutri: '',
-          cat:   _guessCategoryStr(item.category || '') });
-        return;
-      }
+      _setFound({ code, name: item.title, brand: item.brand || '',
+        image: (item.images && item.images[0]) || '',
+        nutri: '', cat: _guessCategoryStr(item.category || '') });
+      return;
     }
-  } catch(e) { /* not found */ }
+  } catch(e) {}
 
-  // ── 4. Нічого не знайдено — ручне введення ───────────────────────────
+  // ── 4. Нічого не знайдено → ручне введення ───────────────────────────
   showManualEntry(code);
 }
 
@@ -208,10 +221,14 @@ function showFoundProduct() {
   document.getElementById('scan-status').textContent = `✅ Знайдено: ${p.name}`;
 }
 
-// ─── Ручне введення (коли не знайдено в жодній базі) ─────────────────────
-function showManualEntry(code) {
-  document.getElementById('scan-status').textContent = `📦 Не знайдено — введіть назву`;
-  scannedProduct = { barcode: code, name: '', brand: '', image: '', nutri: '', cat: 'other' };
+// ─── Ручне введення ───────────────────────────────────────────────────────
+// brand — необов'язковий параметр (якщо продукт знайдено, але без назви)
+function showManualEntry(code, brand = '') {
+  const hasBarcode = !!brand;
+  document.getElementById('scan-status').textContent = hasBarcode
+    ? `⚠ Продукт є в базі, але назва не заповнена — введіть вручну`
+    : `📦 Не знайдено — введіть назву`;
+  scannedProduct = { barcode: code, name: '', brand, image: '', nutri: '', cat: 'other' };
   document.getElementById('pf-img').style.display  = 'none';
   document.getElementById('pf-nutri').innerHTML    = '';
   document.getElementById('pf-brand').textContent  = `Штрихкод: ${code}`;
@@ -251,7 +268,19 @@ function addFromScan() {
     icon: detectedIcon, exp, qty, unit, used: 0, wasted: 0,
     brand: scannedProduct.brand, barcode: scannedProduct.barcode });
 
-  const name = scannedProduct.name;
+  const name    = scannedProduct.name;
+  const barcode = scannedProduct.barcode;
+
+  // Якщо юзер вводив назву вручну — зберігаємо в спільну Firebase-базу
+  // щоб наступного разу цей штрихкод знаходився автоматично
+  if (nameInput && barcode && typeof saveCommunityBarcode === 'function') {
+    saveCommunityBarcode(barcode, {
+      name: scannedProduct.name,
+      brand: scannedProduct.brand,
+      cat: scannedProduct.cat,
+    });
+  }
+
   genRecipes = [];
   closeScan(); renderFridge(); renderAlerts();
   const dupes = prods.filter(p => p.name.toLowerCase() === name.toLowerCase()).length;
