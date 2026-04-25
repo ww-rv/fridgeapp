@@ -761,7 +761,7 @@ function addProd() {
 
 // ===== ICON PICKER =====
 function autoIcon(val) {
-  if (!val) return;
+  if (!val) { resetIcon(); return; }
   const words = val.toLowerCase().split(/[\s,.-]+/);
   for (const w of words) {
     if (w.length < 2) continue;
@@ -770,6 +770,16 @@ function autoIcon(val) {
       if (key.startsWith(w) || w.startsWith(key)) { setIcon(KEYWORD_MAP[key].emoji, KEYWORD_MAP[key].cat); return; }
     }
   }
+  resetIcon();
+}
+function resetIcon() {
+  currentIcon = 'grocery-100.svg'; currentIconCat = 'other';
+  const prev = document.getElementById('icon-preview');
+  prev.innerHTML = renderIcon('grocery-100.svg');
+  prev.style.background = 'var(--bg-sunken)';
+  prev.style.borderStyle = 'dashed';
+  document.getElementById('ficon').value = 'grocery-100.svg';
+  document.getElementById('fc').value    = 'other';
 }
 function setIcon(emoji, cat) {
   currentIcon = emoji; currentIconCat = cat || 'other';
