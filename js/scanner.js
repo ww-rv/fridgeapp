@@ -304,6 +304,9 @@ function addFromScan() {
 }
 
 // --- AI Сканування Чека --------------------------------------------------
+let _scanOrigHTML = null;  // збережений HTML сканера під час перегляду чека
+let receiptItems  = [];    // товари з чека на підтвердження
+
 async function processReceipt(input) {
   if (!input.files || !input.files[0]) return;
   const file = input.files[0];
@@ -328,69 +331,168 @@ async function processReceipt(input) {
       const base64Data = reader.result.split(',')[1];
       const mimeType = file.type;
 
-      const prompt = "Ти — розумний парсер чеків. Тобі надіслано фото чека з супермаркету.\nЗнайди всі куплені продукти харчування. Проігноруй пакети, доставку, непродовольчі товари.\nДля кожного продукту визнач:\n- name: Зрозуміла назва продукту (без зайвих абревіатур, українською мовою).\n- cat: Категорія англійською. Можливі: meat, dairy, veg, fruit, drink, snack, grain, spice, other.\n- qty: Кількість (ціле число). Якщо вагова, став 1.\n- unit: Одиниця ('шт', 'пак', 'кг', 'г', 'л'). Якщо вагова, наприклад 0.3 кг, став 'кг', qty=1, weight=300, weightUnit='г'.\n- weight: Вага (якщо відома, число, інакше null).\n- weightUnit: 'г' або 'мл' або 'кг' або 'л' (якщо відомо, інакше null).\n- brand: Бренд (якщо відомо з чека, інакше '').\n\nВідповідай ТІЛЬКИ валідним JSON-масивом без markdown:\n[{\"name\":\"Молоко\",\"cat\":\"dairy\",\"qty\":1,\"unit\":\"пак\",\"weight\":900,\"weightUnit\":\"г\",\"brand\":\"Яготинське\"},...]\";
+      const prompt = "Ти — розумний парсер чеків. Тобі надіслано фото касового чека з магазину.\nЗнайди всі куплені продукти харчування. Ігноруй пакети, послуги, непродовольчі товари.\nДля кожного продукту визнач:\n- name: Зрозуміла українська назва (без зайвих абревіатур, нормалізована).\n- cat: Категорія. Можливі: meat, dairy, veg, fruit, drink, snack, grain, spice, other.\n- qty: Кількість (ціле число, якщо вагова — 1).\n- unit: Одиниця ('шт', 'пак', 'кг', 'г', 'л'). Якщо вагова — 'кг'.\n- weight: Вага числом або null.\n- weightUnit: 'г'/'кг'/'мл'/'л' або null.\n- brand: Бренд або ''.\nВідповідай ТІЛЬКИ валідним JSON-масивом без markdown:\n[{\"name\":\"Молоко\",\"cat\":\"dairy\",\"qty\":1,\"unit\":\"пак\",\"weight\":900,\"weightUnit\":\"г\",\"brand\":\"Яготинське\"},...]";
 
       try {
         const text = await callAI(selectedProvider, prompt, base64Data, mimeType);
 
-        let cleaned = text.replace(/`json|`/g, '').trim();
+        let cleaned = text.replace(/```json|```/g, '').trim();
         const start = cleaned.indexOf('[');
         const end   = cleaned.lastIndexOf(']');
         if (start === -1 || end === -1) throw new Error('AI не повернув масив');
         const items = JSON.parse(cleaned.slice(start, end + 1));
 
         if (!items || items.length === 0) {
-          statusEl.textContent = '⚠ На чеку не знайдено продуктів.';
+          statusEl.textContent = '⚠ Не вдалося знайти продукти на чеку.';
           return;
         }
 
-        let addedCount = 0;
-        items.forEach(item => {
-          const cGroup = CAT_GROUPS.find(g => g.key === (item.cat || 'other'));
-          let shelfLife = 7;
-          if (cGroup && cGroup.shelfLife) shelfLife = cGroup.shelfLife;
-          const d = new Date(); d.setDate(d.getDate() + shelfLife);
-          const exp = d.toISOString().split('T')[0];
-
-          let icon = 'icons8-grocery-100.svg';
-          if (item.cat && ICONS[item.cat]) icon = ICONS[item.cat];
-          const words = item.name.toLowerCase().split(/[\s,.-]+/);
-          for (const w of words) {
-            if (w.length >= 2 && KEYWORD_MAP[w]) { icon = KEYWORD_MAP[w].emoji; break; }
-          }
-
-          const prod = { 
-            id: nid++, 
-            name: item.name, 
-            cat: item.cat || 'other', 
-            icon: icon, 
-            exp: exp, 
-            qty: item.qty || 1, 
-            unit: item.unit || 'шт', 
-            storage: 'fridge', 
-            used: 0, 
-            wasted: 0, 
-            brand: item.brand || '' 
-          };
-          if (item.weight) { prod.weight = item.weight; prod.weightUnit = item.weightUnit || 'г'; }
-
-          prods.push(prod);
-          addedCount++;
-        });
-
-        saveData();
-        renderFridge();
-        renderAlerts();
-        closeScan();
-        toast(`✅ Додано ${addedCount} продуктів з чека`);
+        _showReceiptReview(items);
       } catch (aiErr) {
         console.error(aiErr);
-        statusEl.textContent = `⚠ Помилка AI: ${aiErr.message}`
+        statusEl.textContent = `⚠ Помилка AI: ${aiErr.message}`;
       }
     };
   } catch (err) {
-    statusEl.textContent = `⚠ Помилка читання файлу: ${err.message}`
+    statusEl.textContent = `⚠ Помилка читання файлу: ${err.message}`;
   } finally {
     input.value = '';
   }
+}
+
+// ─── Перегляд і підтвердження товарів з чека ─────────────────────────────
+function _receiptIcon(item) {
+  let icon = '📦';
+  if (item.cat && ICONS[item.cat]) icon = ICONS[item.cat];
+  for (const w of (item.name || '').toLowerCase().split(/[\s,.-]+/)) {
+    if (w.length >= 2 && KEYWORD_MAP[w]) { icon = KEYWORD_MAP[w].emoji; break; }
+  }
+  return icon;
+}
+
+function _receiptExp(cat) {
+  const g = CAT_GROUPS.find(g => g.key === (cat || 'other'));
+  const d = new Date();
+  d.setDate(d.getDate() + ((g && g.shelfLife) ? g.shelfLife : 7));
+  return d.toISOString().split('T')[0];
+}
+
+function _showReceiptReview(rawItems) {
+  receiptItems = rawItems.map(item => ({
+    name:       item.name,
+    cat:        item.cat || 'other',
+    qty:        item.qty || 1,
+    unit:       item.unit || 'шт',
+    brand:      item.brand || '',
+    weight:     item.weight || null,
+    weightUnit: item.weightUnit || null,
+    icon:       _receiptIcon(item),
+    exp:        _receiptExp(item.cat),
+  }));
+
+  const modal = document.querySelector('#scan-modal-bg .scan-modal');
+  _scanOrigHTML = modal.innerHTML;
+  _renderReceiptUI(modal);
+}
+
+function _renderReceiptUI(modal) {
+  if (!modal) modal = document.querySelector('#scan-modal-bg .scan-modal');
+  modal.innerHTML = `
+    <div class="grabber"></div>
+    <h2>🧾 Товари з чека</h2>
+    <p style="font-size:11.5px;color:var(--text-2);margin-bottom:10px">
+      AI знайшов <b>${receiptItems.length}</b> товарів. Перевірте терміни і натисніть «Додати».
+    </p>
+    <div style="overflow-y:auto;max-height:52vh;padding-right:2px">
+      ${receiptItems.map((item, i) => `
+        <div id="rrow-${i}" style="background:var(--bg-sunken);border-radius:12px;padding:9px 10px;margin-bottom:7px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:22px;flex-shrink:0">${item.icon}</span>
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.name}</div>
+              <div style="font-size:11px;color:var(--text-2)">${item.qty} ${item.unit}${item.brand ? ' · ' + item.brand : ''}</div>
+            </div>
+            <button type="button" onclick="removeReceiptRow(${i})"
+              style="background:none;border:none;color:var(--danger);font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0;opacity:.7">✕</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+            <span style="font-size:11px;color:var(--text-2);flex-shrink:0">Придатний до:</span>
+            <input type="date" value="${item.exp}"
+              onchange="receiptItems[${i}].exp = this.value"
+              style="flex:1;padding:5px 8px;border:0.5px solid var(--border);border-radius:8px;background:var(--bg-card);color:var(--text);font-size:12px;outline:none"/>
+          </div>
+        </div>`).join('')}
+    </div>
+    <div class="mbtns" style="margin-top:10px">
+      <button class="cncl-btn" type="button" onclick="cancelReceiptReview()">Скасувати</button>
+      <button class="bok-btn"  type="button" onclick="addReceiptProducts()">Додати ${receiptItems.length} ✓</button>
+    </div>
+  `;
+}
+
+function removeReceiptRow(i) {
+  receiptItems.splice(i, 1);
+  if (receiptItems.length === 0) { cancelReceiptReview(); return; }
+  _renderReceiptUI();
+}
+
+function cancelReceiptReview() {
+  _restoreScanModal();
+  document.getElementById('scan-modal-bg').classList.remove('open');
+  receiptItems = [];
+}
+
+function _restoreScanModal() {
+  if (_scanOrigHTML) {
+    document.querySelector('#scan-modal-bg .scan-modal').innerHTML = _scanOrigHTML;
+    _scanOrigHTML = null;
+  }
+}
+
+function addReceiptProducts() {
+  if (!receiptItems.length) { cancelReceiptReview(); return; }
+
+  const addedNames = [];
+  receiptItems.forEach(item => {
+    const prod = {
+      id: nid++, name: item.name, cat: item.cat, icon: item.icon,
+      exp: item.exp, qty: item.qty, unit: item.unit,
+      storage: 'fridge', used: 0, wasted: 0, brand: item.brand,
+    };
+    if (item.weight) { prod.weight = item.weight; prod.weightUnit = item.weightUnit || 'г'; }
+    prods.push(prod);
+    addedNames.push(item.name.toLowerCase());
+  });
+
+  // Позначити відповідні товари в списку покупок як куплені
+  let matched = 0;
+  shop.forEach(s => {
+    if (s.done) return;
+    const sn = s.name.toLowerCase();
+    if (addedNames.some(n => n.includes(sn) || sn.includes(n) || _strSimilarity(n, sn) > 0.7)) {
+      s.done = true;
+      matched++;
+    }
+  });
+
+  const count = receiptItems.length;
+  receiptItems = [];
+  _restoreScanModal();
+  document.getElementById('scan-modal-bg').classList.remove('open');
+
+  saveData();
+  renderFridge();
+  renderAlerts();
+  if (matched > 0) renderShop();
+
+  toast(`✅ Додано ${count} продуктів${matched ? `, ${matched} з покупок відмічено` : ''}`);
+}
+
+// Jaccard-схожість на біграмах для порівняння назв
+function _strSimilarity(a, b) {
+  if (a === b) return 1;
+  const bi = s => new Set([...s].map((_, i) => s.slice(i, i + 2)).filter(g => g.length === 2));
+  const A = bi(a), B = bi(b);
+  const inter = [...A].filter(x => B.has(x)).length;
+  return inter / (A.size + B.size - inter || 1);
 }
