@@ -146,8 +146,8 @@ function openQuickActions(id) {
       <button class="qa-btn ok"     onclick="qaConsume()">${SVG.check}<span>Спожив</span></button>
       <button class="qa-btn accent" onclick="qaToShop()">${SVG.cart}<span>В список</span></button>
       <button class="qa-btn warn"   onclick="closeQuickActions();sw('recipes')">${SVG.spark}<span>Рецепт</span></button>
-      <button class="qa-btn danger" onclick="qaWaste()" style="background:#dc3545">🗑️<span>Зіпсувалось</span></button>
-      <button class="qa-btn"        onclick="qaDelete()" style="background:#6c757d">${SVG.close}<span>Видалити</span></button>
+      <button class="qa-btn danger" onclick="qaWaste()" style="background:#dc3545;color:#fff">🗑️<span>Зіпсувалось</span></button>
+      <button class="qa-btn"        onclick="qaDelete()" style="background:#6c757d;color:#fff">${SVG.close}<span>Видалити</span></button>
     </div>`;
   document.getElementById('quick-overlay').classList.add('on');
 }
@@ -170,10 +170,10 @@ function showDeleteConfirm(id, cardEl) {
     </div>
     <div class="qa-title">Що сталося?</div>
     <div style="display:flex;flex-direction:column;gap:8px">
-      <button class="qa-btn danger" onclick="confirmDelWaste()" style="background:#C52F2F;width:100%;justify-content:center;padding:13px;font-size:13px">
+      <button class="qa-btn danger" onclick="confirmDelWaste()" style="background:#C52F2F;color:#fff;width:100%;justify-content:center;padding:13px;font-size:13px">
         🗑️<span>Зіпсувався продукт</span>
       </button>
-      <button class="qa-btn" onclick="confirmDelDelete()" style="background:#6c757d;width:100%;justify-content:center;padding:13px;font-size:13px">
+      <button class="qa-btn" onclick="confirmDelDelete()" style="background:#6c757d;color:#fff;width:100%;justify-content:center;padding:13px;font-size:13px">
         ${SVG.close}<span>Видалити продукт</span>
       </button>
       <button class="qa-btn" onclick="closeQuickActions()" style="background:var(--bg-sunken);width:100%;justify-content:center;padding:11px;font-size:13px;color:var(--text-2)">
@@ -276,8 +276,8 @@ function initSwipes() {
     if (card._swipeInit) return; card._swipeInit = true;
     let sx = 0, dx = 0, active = false;
     const start = e => { if (e.target.closest('button')) return; const t = e.touches?.[0] || e; sx = t.clientX; dx = 0; active = true; card.style.transition = 'none'; };
-    const move  = e => { if (!active) return; const t = e.touches?.[0] || e; dx = Math.min(0, Math.max(-80, t.clientX - sx)); card.style.transform = `translateX(${dx}px)`; };
-    const end   = () => { if (!active) return; active = false; card.style.transition = 'transform .3s var(--ease)'; card.style.transform = dx < -40 ? 'translateX(-80px)' : 'translateX(0)'; };
+    const move  = e => { if (!active) return; const t = e.touches?.[0] || e; dx = Math.min(0, Math.max(-150, t.clientX - sx)); card.style.transform = `translateX(${dx}px)`; };
+    const end   = () => { if (!active) return; active = false; card.style.transition = 'transform .3s var(--ease)'; card.style.transform = dx < -75 ? 'translateX(-150px)' : 'translateX(0)'; };
     card.addEventListener('touchstart', start, { passive: true });
     card.addEventListener('touchmove',  move,  { passive: true });
     card.addEventListener('touchend',   end);
@@ -299,6 +299,7 @@ document.addEventListener('click', e => {
   const id   = parseInt(btn.dataset.id);
   const card = btn.closest('.card-wrap')?.querySelector('.card');
   if (btn.classList.contains('del')) { showDeleteConfirm(id, card); return; }
+  if (btn.classList.contains('used')) { consumeCard(id); return; }
   if (card) { card.style.transition = 'transform .25s var(--ease)'; card.style.transform = 'translateX(0)'; }
 });
 
@@ -413,6 +414,7 @@ function ph(p) {
   const weightStr = p.weight ? `${p.weight}${p.weightUnit||'г'}` : '';
   return `<div class="card-wrap">
     <div class="card-swipe-actions">
+      <button class="swipe-act used" data-id="${p.id}">${SVG.check}<span>Спожив</span></button>
       <button class="swipe-act del" data-id="${p.id}">${SVG.close}<span>Видалити</span></button>
     </div>
     <div class="card" data-id="${p.id}">
